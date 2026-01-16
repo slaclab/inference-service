@@ -1,0 +1,13 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install requests
+RUN pip install --no-cache-dir requests
+
+# Copy client code
+COPY client.py .
+COPY test_client.py .
+
+# Run the test
+CMD ["python", "test_client.py"]
