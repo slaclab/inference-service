@@ -9,7 +9,6 @@ kubectl apply -f k8s/deployment.yaml
 
 # Apply Service
 kubectl apply -f k8s/service.yaml
-
 ```
 
 ## To test models
@@ -29,4 +28,19 @@ curl -X POST http://inference-service:8000/predict \
 
 # Exit
 exit
-```1
+```
+
+## For client
+Make sure this is deployed in the same namespace as the inference service.
+
+```bash
+# Deploy the job
+kubectl apply -f k8s/test-client-job.yaml
+
+# Watch the job
+kubectl get jobs -w
+
+# View logs
+kubectl logs job/test-client
+
+```

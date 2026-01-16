@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-client
+  namespace: inference-service
+spec:
+  template:
+    metadata:
+      labels:
+        app: test-client
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: client
+        image: ghcr.io/slaclab/inference-service/test-client:latest
+        imagePullPolicy: Always
+        env:
+        - name: INFERENCE_SERVICE_URL
+          value: "http://inference-service:8000"
+  backoffLimit: 2
