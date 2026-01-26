@@ -76,6 +76,24 @@ class InferenceClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def predict_batch(self, inputs_list: List[Dict[str, float]]) -> Dict[str, Any]:
+        """
+        Make batch predictions
+        
+        Args:
+            inputs_list: List of input dictionaries (each can be partial)
+            
+        Returns:
+            Batch prediction response with list of outputs
+        """
+        response = self.session.post(
+            f"{self.base_url}/predict/batch",
+            json={"inputs_list": inputs_list},
+            timeout=self.timeout * 2  # Longer timeout for batch
+        )
+        response.raise_for_status()
+        return response.json()
     
     def load_model(self, model_name: str, model_version: Optional[str] = None) -> Dict[str, Any]:
         """

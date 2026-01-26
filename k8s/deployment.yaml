@@ -1,3 +1,17 @@
+---
+# ConfigMap for inference service configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-config
+  namespace: inference-service
+data:
+  MLFLOW_TRACKING_URI: "https://ard-mlflow.slac.stanford.edu"  # UPDATE THIS
+  MODEL_NAME: "lcls-cu-inj-model"
+  MODEL_VERSION: "1"
+
+---
+# Deployment for inference service
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +20,7 @@ metadata:
   labels:
     app: inference-service
 spec:
-  replicas: 1  # Start with 1, can scale later
+  replicas: 1
   selector:
     matchLabels:
       app: inference-service
@@ -17,7 +31,7 @@ spec:
     spec:
       containers:
       - name: inference
-        image: ghcr.io/slaclab/inference-service/inference-service:main-7963713  # UPDATE 
+        image: ghcr.io/slaclab/inference-service/inference-service:latest  # UPDATE THIS
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -62,3 +76,47 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
+
+---
+# Service for inference service
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-service
+  namespace: inference-service
+  labels:
+    app: inference-service
+spec:
+  type: ClusterIP
+  selector:
+    app: inference-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+
+---
+# Job for validation tests
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: validation-test
+  namespace: inference-service
+spec:
+  template:
+    metadata:
+      labels:
+        app: validation-test
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: test
+        image: ghcr.io/slaclab/inference-service/test-client:latest  # UPDATE THIS
+        imagePullPolicy: Always
+        env:
+        - name: INFERENCE_SERVICE_URL
+          value: "http://inference-service:8000"
+        - name: VALIDATION_TOLERANCE
+          value: "0.001"
+  backoffLimit: 2

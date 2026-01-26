@@ -70,6 +70,25 @@ class ModelInfo(BaseModel):
     input_names: Optional[List[str]] = None
     output_names: Optional[List[str]] = None
 
+class BatchPredictionRequest(BaseModel):
+    inputs_list: List[Dict[str, float]]
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "inputs_list": [
+                    {"SOLN:IN20:121:BACT": 0.38},
+                    {"SOLN:IN20:121:BACT": 0.40},
+                    {"SOLN:IN20:121:BACT": 0.44}
+                ]
+            }
+        }
+
+
+class BatchPredictionResponse(BaseModel):
+    outputs_list: List[Dict[str, float]]
+    batch_size: int
+
 
 def download_model_artifacts(model_name: str, model_version: Optional[str] = None) -> tuple[str, str]:
     """
@@ -387,6 +406,66 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+@app.post("/predict/batch", response_model=BatchPredictionResponse)
+async def predict_batch(request: BatchPredictionRequest):
+    """
+    Run batch inference - multiple predictions at once
+    
+    Takes a list of input dictionaries and returns a list of predictions.
+    Supports partial inputs (model will use defaults for missing values).
+    """
+    if model is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="No model loaded. Use POST /model/load to load a model first."
+        )
+    
+    try:
+        logger.debug(f"Received batch prediction request with {len(request.inputs_list)} samples")
+        
+        outputs_list = []
+        
+        for idx, inputs in enumerate(request.inputs_list):
+            logger.debug(f"Processing sample {idx + 1}/{len(request.inputs_list)}: {inputs}")
+            
+            # Set input validation to warn (not fail)
+            model.input_validation_config = {k: "warn" for k in model.input_names}
+            
+            # Evaluate the LUME model
+            outputs = model.evaluate(inputs)
+            
+            # Clean outputs
+            cleaned_outputs = {}
+            for k, v in outputs.items():
+                try:
+                    import torch
+                    if isinstance(v, torch.Tensor):
+                        cleaned_outputs[k] = float(v.detach().cpu().numpy())
+                    else:
+                        cleaned_outputs[k] = float(v)
+                except (ImportError, AttributeError):
+                    try:
+                        import numpy as np
+                        if isinstance(v, np.ndarray):
+                            cleaned_outputs[k] = float(v)
+                        else:
+                            cleaned_outputs[k] = float(v)
+                    except ImportError:
+                        cleaned_outputs[k] = float(v)
+            
+            outputs_list.append(cleaned_outputs)
+        
+        logger.debug(f"Batch prediction completed: {len(outputs_list)} results")
+        
+        return BatchPredictionResponse(
+            outputs_list=outputs_list,
+            batch_size=len(outputs_list)
+        )
+    
+    except Exception as e:
+        logger.error(f"Batch prediction error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
 
 
 if __name__ == "__main__":
