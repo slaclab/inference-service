@@ -144,22 +144,6 @@ def find_yaml_config(artifact_path: str) -> str:
     """
     artifact_dir = Path(artifact_path)
     
-    # Common names for LUME model configs
-    possible_names = [
-        "model_config.yaml",
-        "model.yaml",
-        "config.yaml",
-        "lume_model.yaml"
-    ]
-    
-    # Search for YAML files
-    for name in possible_names:
-        yaml_path = artifact_dir / name
-        if yaml_path.exists():
-            logger.info(f"Found config file: {yaml_path}")
-            return str(yaml_path)
-    
-    # If not found by name, search for any .yaml or .yml file
     yaml_files = list(artifact_dir.glob("*.yaml")) + list(artifact_dir.glob("*.yml"))
     
     if yaml_files:
