@@ -1,0 +1,59 @@
+# copier-template-k8s/copier.yml
+
+_templates_suffix: .jinja
+
+# Questions to ask when generating
+service_name:
+  type: str
+  help: What is the service name?
+  default: inference-service
+
+namespace:
+  type: str
+  help: Which Kubernetes namespace?
+  default: inference-service
+
+model_name:
+  type: str
+  help: What is the MLflow model name?
+  default: lcls-cu-inj-model
+
+model_version:
+  type: str
+  help: What model version to deploy?
+  default: "1"
+
+mlflow_uri:
+  type: str
+  help: MLflow tracking URI?
+  default: https://ard-mlflow.slac.stanford.edu/
+
+container_registry:
+  type: str
+  help: Container registry (e.g., ghcr.io/username/repo)?
+  default: ghcr.io/slaclab/inference-service
+
+replicas:
+  type: int
+  help: Number of replicas?
+  default: 1
+
+memory_request:
+  type: str
+  help: Memory request (e.g., 2Gi)?
+  default: "2Gi"
+
+memory_limit:
+  type: str
+  help: Memory limit (e.g., 4Gi)?
+  default: "4Gi"
+
+cpu_request:
+  type: str
+  help: CPU request (e.g., 500m)?
+  default: "500m"
+
+cpu_limit:
+  type: str
+  help: CPU limit (e.g., 2000m)?
+  default: "2000m"

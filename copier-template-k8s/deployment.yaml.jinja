@@ -1,0 +1,103 @@
+# copier-template-k8s/deployment.yaml.jinja
+
+---
+# ConfigMap for {{ service_name }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ service_name }}-config
+  namespace: {{ namespace }}
+data:
+  MLFLOW_TRACKING_URI: "{{ mlflow_uri }}"
+  MODEL_NAME: "{{ model_name }}"
+  MODEL_VERSION: "{{ model_version }}"
+
+---
+# Deployment for {{ service_name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ service_name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ service_name }}
+    model: {{ model_name }}
+    version: "{{ model_version }}"
+spec:
+  replicas: {{ replicas }}
+  selector:
+    matchLabels:
+      app: {{ service_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ service_name }}
+        model: {{ model_name }}
+        version: "{{ model_version }}"
+    spec:
+      containers:
+      - name: inference
+        image: {{ container_registry }}/inference-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            configMapKeyRef:
+              name: {{ service_name }}-config
+              key: MLFLOW_TRACKING_URI
+        - name: MODEL_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: {{ service_name }}-config
+              key: MODEL_NAME
+        - name: MODEL_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: {{ service_name }}-config
+              key: MODEL_VERSION
+        resources:
+          requests:
+            memory: "{{ memory_request }}"
+            cpu: "{{ cpu_request }}"
+          limits:
+            memory: "{{ memory_limit }}"
+            cpu: "{{ cpu_limit }}"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+---
+# Service for {{ service_name }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ service_name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ service_name }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ service_name }}
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP

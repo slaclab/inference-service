@@ -176,9 +176,9 @@ def main():
     
     # Summary
     print_section("VALIDATION SUMMARY")
-    print(f"Test 1 (All defaults): {'✓ PASSED' if test1_passed else '✗ FAILED'}")
-    print(f"Test 2 (Partial inputs): {'✓ PASSED' if test2_passed else '✗ FAILED'}")
-    print(f"Test 3 (Batch prediction): {'✓ PASSED' if test3_passed else '✗ FAILED'}")
+    print(f"Test 1 (All defaults): {' PASSED' if test1_passed else ' FAILED'}")
+    print(f"Test 2 (Partial inputs): {' PASSED' if test2_passed else ' FAILED'}")
+    print(f"Test 3 (Batch prediction): {' PASSED' if test3_passed else ' FAILED'}")
     
     all_passed = test1_passed and test2_passed and test3_passed
     
