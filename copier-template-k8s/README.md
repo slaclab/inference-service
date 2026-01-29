@@ -14,3 +14,14 @@ copier copy --data-file model-configs/iris-model.yaml copier-template-k8s deploy
 # Or from your project root
 copier copy copier-template-k8s deployments/fel-model
 ```
+
+## Testing
+```bash
+kubectl run test-model \
+> --image=ghcr.io/slaclab/inference-service/test-client:latest \
+> --rm -it --restart=Never \
+> --env="INFERENCE_SERVICE_URL=http://inference-service-test:8000" \
+> -n inference-service \
+> python test_client.py
+
+```
