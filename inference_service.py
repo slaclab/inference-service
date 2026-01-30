@@ -4,12 +4,25 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import mlflow
 from mlflow.tracking import MlflowClient
 from lume_model.models import TorchModel
+
+# Import torch and numpy at the top for efficiency
+try:
+    import torch
+except ImportError:
+    torch = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # Set up logging
 logging.basicConfig(
@@ -19,9 +32,6 @@ logging.basicConfig(
     level=logging.DEBUG,
 )
 logger = logging.getLogger(__name__)
-
-# Create FastAPI app
-app = FastAPI(title="LUME Model Inference Service")
 
 # Model configuration
 DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", None)
@@ -47,6 +57,15 @@ class PredictionResponse(BaseModel):
     outputs: Dict[str, float]
 
 
+class BatchPredictionRequest(BaseModel):
+    inputs_list: List[Dict[str, float]]
+
+
+class BatchPredictionResponse(BaseModel):
+    outputs_list: List[Dict[str, float]]
+    batch_size: int
+
+
 class ModelInputsResponse(BaseModel):
     input_names: List[str]
     input_variables: Dict[str, Any]
@@ -69,25 +88,6 @@ class ModelInfo(BaseModel):
     run_id: Optional[str] = None
     input_names: Optional[List[str]] = None
     output_names: Optional[List[str]] = None
-
-class BatchPredictionRequest(BaseModel):
-    inputs_list: List[Dict[str, float]]
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "inputs_list": [
-                    {"SOLN:IN20:121:BACT": 0.38},
-                    {"SOLN:IN20:121:BACT": 0.40},
-                    {"SOLN:IN20:121:BACT": 0.44}
-                ]
-            }
-        }
-
-
-class BatchPredictionResponse(BaseModel):
-    outputs_list: List[Dict[str, float]]
-    batch_size: int
 
 
 def download_model_artifacts(model_name: str, model_version: Optional[str] = None) -> tuple[str, str]:
@@ -187,10 +187,14 @@ def load_lume_model(model_name: str, model_version: Optional[str] = None):
         # Load the LUME TorchModel
         model = TorchModel(yaml_config_path)
         
+        # Set input validation to warn once when model is loaded
+        model.input_validation_config = {k: "warn" for k in model.input_names}
+        
         current_model_name = model_name
         current_model_version = model_version
         model_config_path = yaml_config_path
-
+        
+        # Store run_id on the model object
         model._run_id = run_id
         
         logger.info(f"✓ LUME model loaded successfully!")
@@ -208,9 +212,32 @@ def load_lume_model(model_name: str, model_version: Optional[str] = None):
         raise
 
 
-@app.on_event("startup")
-async def startup():
-    """Load default model on startup if specified"""
+def clean_output_value(value):
+    """
+    Clean output value - convert torch tensors and numpy arrays to Python floats
+    
+    Parameters
+    ----------
+    value : any
+        Output value from model
+    
+    Returns
+    -------
+    float
+        Cleaned output value
+    """
+    if torch is not None and isinstance(value, torch.Tensor):
+        return float(value.detach().cpu().numpy())
+    elif np is not None and isinstance(value, np.ndarray):
+        return float(value)
+    else:
+        return float(value)
+
+
+# Lifespan context manager for startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     logger.info(f"MLflow Tracking URI: {MLFLOW_TRACKING_URI}")
     
     if DEFAULT_MODEL_NAME:
@@ -221,6 +248,15 @@ async def startup():
             logger.warning("Service will start without a loaded model. Use POST /model/load to load a model.")
     else:
         logger.info("No default model specified. Use POST /model/load to load a model.")
+    
+    yield
+    
+    # Shutdown (cleanup if needed)
+    logger.info("Shutting down inference service")
+
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="LUME Model Inference Service", lifespan=lifespan)
 
 
 @app.get("/")
@@ -240,7 +276,8 @@ async def root():
             "load_model": "POST /model/load",
             "model_inputs": "/inputs",
             "model_outputs": "/outputs",
-            "predict": "/predict"
+            "predict": "/predict",
+            "predict_batch": "/predict/batch"
         }
     }
 
@@ -266,7 +303,7 @@ async def get_model_info():
         loaded=True,
         model_name=current_model_name,
         model_version=current_model_version,
-         run_id=getattr(model, '_run_id', None),
+        run_id=getattr(model, '_run_id', None),
         input_names=model.input_names,
         output_names=model.output_names
     )
@@ -294,6 +331,7 @@ async def load_model_endpoint(request: LoadModelRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
+
 @app.get("/inputs", response_model=ModelInputsResponse)
 async def get_model_inputs():
     """Get information about model input variables"""
@@ -319,15 +357,16 @@ async def get_model_inputs():
         input_variables=input_variables
     )
 
+
 @app.get("/outputs", response_model=ModelOutputsResponse)
 async def get_model_outputs():
     """Get information about model output variables"""
     if model is None:
         raise HTTPException(
-            status_code=503,
+            status_code=503, 
             detail="No model loaded. Use POST /model/load to load a model first."
         )
-
+    
     # Extract output variable info from LUME model
     # output_variables is a LIST, not a dict!
     output_variables = {}
@@ -335,12 +374,11 @@ async def get_model_outputs():
         output_variables[var.name] = {
             "unit": var.unit,
         }
-
+    
     return ModelOutputsResponse(
         output_names=model.output_names,
         output_variables=output_variables
     )
-
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -359,29 +397,13 @@ async def predict(request: PredictionRequest):
     try:
         logger.debug(f"Received prediction request: {request.inputs}")
         
-        # Evaluate the LUME model
+        # Evaluate the LUME model (input validation already set on model load)
         outputs = model.evaluate(request.inputs)
         
         logger.debug(f"Raw model output: {outputs}")
         
-        # Clean outputs (convert torch tensors, numpy arrays to Python floats)
-        cleaned_outputs = {}
-        for k, v in outputs.items():
-            try:
-                import torch
-                if isinstance(v, torch.Tensor):
-                    cleaned_outputs[k] = float(v.detach().cpu().numpy())
-                else:
-                    cleaned_outputs[k] = float(v)
-            except (ImportError, AttributeError):
-                try:
-                    import numpy as np
-                    if isinstance(v, np.ndarray):
-                        cleaned_outputs[k] = float(v)
-                    else:
-                        cleaned_outputs[k] = float(v)
-                except ImportError:
-                    cleaned_outputs[k] = float(v)
+        # Clean outputs
+        cleaned_outputs = {k: clean_output_value(v) for k, v in outputs.items()}
         
         logger.debug(f"Prediction result: {cleaned_outputs}")
         
@@ -390,6 +412,7 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
 
 @app.post("/predict/batch", response_model=BatchPredictionResponse)
 async def predict_batch(request: BatchPredictionRequest):
@@ -413,31 +436,11 @@ async def predict_batch(request: BatchPredictionRequest):
         for idx, inputs in enumerate(request.inputs_list):
             logger.debug(f"Processing sample {idx + 1}/{len(request.inputs_list)}: {inputs}")
             
-            # Set input validation to warn (not fail)
-            model.input_validation_config = {k: "warn" for k in model.input_names}
-            
-            # Evaluate the LUME model
+            # Evaluate the LUME model (input validation already set on model load)
             outputs = model.evaluate(inputs)
             
             # Clean outputs
-            cleaned_outputs = {}
-            for k, v in outputs.items():
-                try:
-                    import torch
-                    if isinstance(v, torch.Tensor):
-                        cleaned_outputs[k] = float(v.detach().cpu().numpy())
-                    else:
-                        cleaned_outputs[k] = float(v)
-                except (ImportError, AttributeError):
-                    try:
-                        import numpy as np
-                        if isinstance(v, np.ndarray):
-                            cleaned_outputs[k] = float(v)
-                        else:
-                            cleaned_outputs[k] = float(v)
-                    except ImportError:
-                        cleaned_outputs[k] = float(v)
-            
+            cleaned_outputs = {k: clean_output_value(v) for k, v in outputs.items()}
             outputs_list.append(cleaned_outputs)
         
         logger.debug(f"Batch prediction completed: {len(outputs_list)} results")
