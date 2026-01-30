@@ -1,23 +1,9 @@
-# copier-template-k8s/deployment.yaml.jinja
-
----
-# ConfigMap for {{ service_name }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ service_name }}-config
-  namespace: {{ namespace }}
-data:
-  MLFLOW_TRACKING_URI: "{{ mlflow_uri }}"
-  MODEL_NAME: "{{ model_name }}"
-  MODEL_VERSION: "{{ model_version }}"
-
 ---
 # Deployment for {{ service_name }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ service_name }}
+  name: {{ service_name }}-deployment
   namespace: {{ namespace }}
   labels:
     app: {{ service_name }}
@@ -44,21 +30,17 @@ spec:
           name: http
           protocol: TCP
         env:
+        # MLflow URI from shared ConfigMap (created separately)
         - name: MLFLOW_TRACKING_URI
           valueFrom:
             configMapKeyRef:
-              name: {{ service_name }}-config
+              name: mlflow-config  # Assumes this exists in namespace
               key: MLFLOW_TRACKING_URI
+        # Model-specific config as direct env vars
         - name: MODEL_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: {{ service_name }}-config
-              key: MODEL_NAME
+          value: "{{ model_name }}"
         - name: MODEL_VERSION
-          valueFrom:
-            configMapKeyRef:
-              name: {{ service_name }}-config
-              key: MODEL_VERSION
+          value: "{{ model_version }}"
         resources:
           requests:
             memory: "{{ memory_request }}"

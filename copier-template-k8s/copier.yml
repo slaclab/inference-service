@@ -23,11 +23,6 @@ model_version:
   help: What model version to deploy?
   default: "1"
 
-mlflow_uri:
-  type: str
-  help: MLflow tracking URI?
-  default: https://ard-mlflow.slac.stanford.edu/
-
 container_registry:
   type: str
   help: Container registry (e.g., ghcr.io/username/repo)?

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-config
+  namespace: inference-service
+data:
+  MLFLOW_TRACKING_URI: "" 
