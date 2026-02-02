@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 import uvicorn
 import mlflow
@@ -170,8 +170,9 @@ def load_lume_model(model_name: str, model_version: Optional[str] = None):
         Name of the registered model in MLflow
     model_version : str, optional
         Version number, stage name, or "latest"
+
+    Returns the loaded model.
     """
-    global model, current_model_name, current_model_version, model_config_path
     
     try:
         logger.info(f"Loading LUME model '{model_name}' version '{model_version}'...")
@@ -190,22 +191,21 @@ def load_lume_model(model_name: str, model_version: Optional[str] = None):
         # Set input validation to warn once when model is loaded
         model.input_validation_config = {k: "warn" for k in model.input_names}
         
-        current_model_name = model_name
-        current_model_version = model_version
-        model_config_path = yaml_config_path
-        
-        # Store run_id on the model object
+        # Store metadata on the model object
         model._run_id = run_id
+        model._model_name = model_name
+        model._model_version = model_version
+        model._config_path = yaml_config_path
         
-        logger.info(f"✓ LUME model loaded successfully!")
-        logger.info(f"  Model name: {current_model_name}")
-        logger.info(f"  Model version: {current_model_version}")
+        logger.info(f" LUME model loaded successfully!")
+        logger.info(f"  Model name: {model_name}")
+        logger.info(f"  Model version: {model_version}")
         logger.info(f"  Run ID: {run_id}")
-        logger.info(f"  Config path: {model_config_path}")
+        logger.info(f"  Config path: {yaml_config_path}")
         logger.info(f"  Input variables: {model.input_names}")
         logger.info(f"  Output variables: {model.output_names}")
         
-        return True
+        return model
         
     except Exception as e:
         logger.error(f"✗ Failed to load model: {str(e)}", exc_info=True)
@@ -242,12 +242,19 @@ async def lifespan(app: FastAPI):
     
     if DEFAULT_MODEL_NAME:
         try:
-            load_lume_model(DEFAULT_MODEL_NAME, DEFAULT_MODEL_VERSION)
+            model = load_lume_model(DEFAULT_MODEL_NAME, DEFAULT_MODEL_VERSION)
+            app.state.model = model
+            app.state.model_name = DEFAULT_MODEL_NAME
+            app.state.model_version = DEFAULT_MODEL_VERSION
+            app.state.run_id = getattr(model, '_run_id', None)
+            app.state.config_path = getattr(model, '_config_path', None)
+            logger.info(" Model loaded and stored in app state")
         except Exception as e:
             logger.warning(f"Could not load default model on startup: {str(e)}")
-            logger.warning("Service will start without a loaded model. Use POST /model/load to load a model.")
+            raise # Fail startup if model doesn't load 
     else:
-        logger.info("No default model specified. Use POST /model/load to load a model.")
+        logger.warning("No default model specified via MODEL_NAME environment variable")
+        raise ValueError("MODEL_NAME environment variable is required")
     
     yield
     
@@ -258,22 +265,30 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with lifespan
 app = FastAPI(title="LUME Model Inference Service", lifespan=lifespan)
 
+# Dependency: Get model from app state
+async def get_model(request: Request) -> TorchModel:
+    """Dependency injection to retrieve immutable model from app state"""
+    if not hasattr(request.app.state, 'model') or request.app.state.model is None:
+        raise HTTPException(status_code=503, detail="No model loaded")
+    return request.app.state.model
+
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """Root endpoint with service info"""
+    model_loaded = hasattr(request.app.state, 'model') and request.app.state.model is not None
+    
     return {
         "service": "LUME Model Inference Service",
         "mlflow_tracking_uri": MLFLOW_TRACKING_URI,
-        "model_loaded": model is not None,
+        "model_loaded": model_loaded,
         "current_model": {
-            "name": current_model_name,
-            "version": current_model_version
-        } if model else None,
+            "name": getattr(request.app.state, 'model_name', None),
+            "version": getattr(request.app.state, 'model_version', None)
+        } if model_loaded else None,
         "endpoints": {
             "health": "/health",
             "model_info": "/model/info",
-            "load_model": "POST /model/load",
             "model_inputs": "/inputs",
             "model_outputs": "/outputs",
             "predict": "/predict",
@@ -281,68 +296,39 @@ async def root():
         }
     }
 
-
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint for Kubernetes probes"""
+    model_loaded = hasattr(request.app.state, 'model') and request.app.state.model is not None
+    
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
-        "model_name": current_model_name,
-        "model_version": current_model_version
+        "model_loaded": model_loaded,
+        "model_name": getattr(request.app.state, 'model_name', None),
+        "model_version": getattr(request.app.state, 'model_version', None)
     }
 
 
 @app.get("/model/info", response_model=ModelInfo)
-async def get_model_info():
+async def get_model_info(request: Request):
     """Get information about the currently loaded model"""
-    if model is None:
+    if not hasattr(request.app.state, 'model') or request.app.state.model is None:
         return ModelInfo(loaded=False)
+    
+    model = request.app.state.model
     
     return ModelInfo(
         loaded=True,
-        model_name=current_model_name,
-        model_version=current_model_version,
-        run_id=getattr(model, '_run_id', None),
+        model_name=getattr(request.app.state, 'model_name', None),
+        model_version=getattr(request.app.state, 'model_version', None),
+        run_id=getattr(request.app.state, 'run_id', None),
         input_names=model.input_names,
         output_names=model.output_names
     )
 
-
-@app.post("/model/load")
-async def load_model_endpoint(request: LoadModelRequest):
-    """
-    Load a new LUME model from MLflow
-    
-    Downloads artifacts and loads the TorchModel from YAML config.
-    """
-    try:
-        load_lume_model(request.model_name, request.model_version)
-        
-        return {
-            "status": "success",
-            "message": f"Model '{request.model_name}' version '{request.model_version}' loaded successfully",
-            "model_name": current_model_name,
-            "model_version": current_model_version,
-            "config_path": model_config_path,
-            "input_names": model.input_names,
-            "output_names": model.output_names
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
-
-
 @app.get("/inputs", response_model=ModelInputsResponse)
-async def get_model_inputs():
+async def get_model_inputs(model: TorchModel = Depends(get_model)):
     """Get information about model input variables"""
-    if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="No model loaded. Use POST /model/load to load a model first."
-        )
-    
-    # Extract input variable info from LUME model
-    # input_variables is a LIST, not a dict!
     input_variables = {}
     for var in model.input_variables:
         input_variables[var.name] = {
@@ -359,16 +345,8 @@ async def get_model_inputs():
 
 
 @app.get("/outputs", response_model=ModelOutputsResponse)
-async def get_model_outputs():
+async def get_model_outputs(model: TorchModel = Depends(get_model)):
     """Get information about model output variables"""
-    if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="No model loaded. Use POST /model/load to load a model first."
-        )
-    
-    # Extract output variable info from LUME model
-    # output_variables is a LIST, not a dict!
     output_variables = {}
     for var in model.output_variables:
         output_variables[var.name] = {
@@ -380,20 +358,17 @@ async def get_model_outputs():
         output_variables=output_variables
     )
 
-
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(request: PredictionRequest):
+async def predict(
+    request: PredictionRequest,
+    model: TorchModel = Depends(get_model)
+):
     """
     Run model inference using LUME model.evaluate()
     
     Takes a dictionary of inputs and returns model predictions.
+    Model is injected via dependency injection (thread-safe, immutable).
     """
-    if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="No model loaded. Use POST /model/load to load a model first."
-        )
-    
     try:
         logger.debug(f"Received prediction request: {request.inputs}")
         
@@ -414,20 +389,19 @@ async def predict(request: PredictionRequest):
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 
+
 @app.post("/predict/batch", response_model=BatchPredictionResponse)
-async def predict_batch(request: BatchPredictionRequest):
+async def predict_batch(
+    request: BatchPredictionRequest,
+    model: TorchModel = Depends(get_model)
+):
     """
     Run batch inference - multiple predictions at once
     
     Takes a list of input dictionaries and returns a list of predictions.
     Supports partial inputs (model will use defaults for missing values).
+    Model is injected via dependency injection (thread-safe, immutable).
     """
-    if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="No model loaded. Use POST /model/load to load a model first."
-        )
-    
     try:
         logger.debug(f"Received batch prediction request with {len(request.inputs_list)} samples")
         
@@ -453,6 +427,19 @@ async def predict_batch(request: BatchPredictionRequest):
     except Exception as e:
         logger.error(f"Batch prediction error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
+@app.get("/debug/state")
+async def debug_state(request: Request):
+    """Debug endpoint to see what's in app.state"""
+    return {
+        "has_model": hasattr(request.app.state, 'model'),
+        "model_is_none": getattr(request.app.state, 'model', None) is None,
+        "has_model_name": hasattr(request.app.state, 'model_name'),
+        "model_name": getattr(request.app.state, 'model_name', None),
+        "has_model_version": hasattr(request.app.state, 'model_version'),
+        "model_version": getattr(request.app.state, 'model_version', None),
+        "state_attributes": dir(request.app.state)
+    }
 
 
 if __name__ == "__main__":
