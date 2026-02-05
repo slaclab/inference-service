@@ -242,7 +242,9 @@ async def lifespan(app: FastAPI):
     
     if DEFAULT_MODEL_NAME:
         try:
+            # load model once
             model = load_lume_model(DEFAULT_MODEL_NAME, DEFAULT_MODEL_VERSION)
+            # store in app
             app.state.model = model
             app.state.model_name = DEFAULT_MODEL_NAME
             app.state.model_version = DEFAULT_MODEL_VERSION

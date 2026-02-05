@@ -1,0 +1,85 @@
+---
+# Deployment for inference-service-fel
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-service-fel-deployment
+  namespace: lume-online-ml
+  labels:
+    app: inference-service-fel
+    model: lcls-fel-surrogate
+    version: "1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-service-fel
+  template:
+    metadata:
+      labels:
+        app: inference-service-fel
+        model: lcls-fel-surrogate
+        version: "1"
+    spec:
+      containers:
+      - name: inference
+        image: ghcr.io/slaclab/inference-service/inference-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        # MLflow URI from shared ConfigMap (created separately)
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            configMapKeyRef:
+              name: mlflow-config  # Assumes this exists in namespace
+              key: MLFLOW_TRACKING_URI
+        # Model-specific config as direct env vars
+        - name: MODEL_NAME
+          value: "lcls-fel-surrogate"
+        - name: MODEL_VERSION
+          value: "1"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+---
+# Service for inference-service-fel
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-service-fel
+  namespace: lume-online-ml
+  labels:
+    app: inference-service-fel
+spec:
+  type: ClusterIP
+  selector:
+    app: inference-service-fel
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP

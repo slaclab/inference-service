@@ -1,0 +1,11 @@
+service_name: inference-service-cu-inj
+namespace: lume-online-ml
+model_name: lcls-cu-inj-model
+model_version: "1"
+# mlflow_uri removed - it's in the shared mlflow-config ConfigMap
+container_registry: ghcr.io/slaclab/inference-service
+replicas: 1
+memory_request: "4Gi"
+memory_limit: "8Gi"
+cpu_request: "1000m"
+cpu_limit: "4000m"
