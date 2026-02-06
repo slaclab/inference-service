@@ -2,6 +2,7 @@ import os
 import logging
 import sys
 import tempfile
+import asyncio
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from contextlib import asynccontextmanager
@@ -41,11 +42,6 @@ MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-serve
 # Set MLflow tracking URI
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-# Global variables
-model: Optional[TorchModel] = None
-current_model_name = None
-current_model_version = None
-model_config_path = None
 
 
 # Request/Response models
@@ -90,6 +86,11 @@ class ModelInfo(BaseModel):
     output_names: Optional[List[str]] = None
 
 
+class ErrorResponse(BaseModel):
+    error: str
+    detail: Optional[str] = None
+
+
 def download_model_artifacts(model_name: str, model_version: Optional[str] = None) -> tuple[str, str]:
     """
     Download model artifacts from MLflow
@@ -120,9 +121,10 @@ def download_model_artifacts(model_name: str, model_version: Optional[str] = Non
     
     logger.info(f"Downloading artifacts from run_id: {run_id}")
     
-    # Download artifacts to a temporary directory
-    artifact_path = mlflow.artifacts.download_artifacts(run_id=run_id)
-    
+    # Download artifacts to a temporary directory for better cleanup control
+    temp_dir = tempfile.mkdtemp(prefix="mlflow_artifacts_")
+    artifact_path = mlflow.artifacts.download_artifacts(run_id=run_id, dst_path=temp_dir)
+
     logger.info(f"Artifacts downloaded to: {artifact_path}")
     
     return run_id, artifact_path
@@ -160,7 +162,7 @@ def find_yaml_config(artifact_path: str) -> str:
     raise FileNotFoundError(f"No YAML config file found in {artifact_path}")
 
 
-def load_lume_model(model_name: str, model_version: Optional[str] = None):
+def load_lume_model(model_name: str, model_version: Optional[str] = None) -> TorchModel:
     """
     Load a LUME TorchModel from MLflow artifacts
     
@@ -212,7 +214,7 @@ def load_lume_model(model_name: str, model_version: Optional[str] = None):
         raise
 
 
-def clean_output_value(value):
+def clean_output_value(value) -> float:
     """
     Clean output value - convert torch tensors and numpy arrays to Python floats
     
@@ -232,6 +234,98 @@ def clean_output_value(value):
         return float(value)
     else:
         return float(value)
+
+
+def prepare_batch_inputs(inputs_list: List[Dict[str, float]], model: TorchModel) -> Dict[str, Any]:
+    """
+    Convert list of input dictionaries to batched tensors
+
+    Parameters
+    ----------
+    inputs_list : List[Dict[str, float]]
+        List of input dictionaries
+    model : TorchModel
+        The model (used to get input names and defaults)
+
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary with batched tensors/arrays for each input
+    """
+    if torch is None:
+        raise ImportError("torch is required for batch processing")
+
+    batch_size = len(inputs_list)
+    batch_inputs = {}
+
+    # For each input variable in the model
+    for input_name in model.input_names:
+        values = []
+        for inputs in inputs_list:
+            # Use provided value or model default
+            if input_name in inputs:
+                values.append(inputs[input_name])
+            else:
+                # Get default value from model
+                default_val = None
+                for var in model.input_variables:
+                    if var.name == input_name:
+                        default_val = var.default_value
+                        break
+                if default_val is not None:
+                    values.append(default_val)
+                else:
+                    raise ValueError(f"No value or default found for input '{input_name}'")
+
+        # Stack values into a batch tensor
+        batch_inputs[input_name] = torch.tensor(values, dtype=torch.float32)
+
+    return batch_inputs
+
+
+def split_batch_outputs(batch_outputs: Dict[str, Any], batch_size: int) -> List[Dict[str, float]]:
+    """
+    Split batched outputs back into individual result dictionaries
+
+    Parameters
+    ----------
+    batch_outputs : Dict[str, Any]
+        Dictionary of batched output tensors/arrays
+    batch_size : int
+        Number of samples in the batch
+
+    Returns
+    -------
+    List[Dict[str, float]]
+        List of output dictionaries (one per sample)
+    """
+    results = []
+
+    for i in range(batch_size):
+        result = {}
+        for key, value in batch_outputs.items():
+            # Handle both tensors and arrays
+            if torch is not None and isinstance(value, torch.Tensor):
+                if value.dim() == 0:
+                    # Scalar tensor (batch size 1)
+                    result[key] = clean_output_value(value)
+                else:
+                    # Batched tensor
+                    result[key] = clean_output_value(value[i])
+            elif np is not None and isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    result[key] = clean_output_value(value)
+                else:
+                    result[key] = clean_output_value(value[i])
+            else:
+                # Try indexing, fallback to the value itself
+                try:
+                    result[key] = clean_output_value(value[i])
+                except (TypeError, IndexError):
+                    result[key] = clean_output_value(value)
+        results.append(result)
+
+    return results
 
 
 # Lifespan context manager for startup/shutdown
@@ -263,9 +357,22 @@ async def lifespan(app: FastAPI):
     # Shutdown (cleanup if needed)
     logger.info("Shutting down inference service")
 
+    # Clean up downloaded artifacts if they exist
+    if hasattr(app.state, 'config_path') and app.state.config_path:
+        try:
+            import shutil
+            artifact_dir = Path(app.state.config_path).parent
+            # Only remove if it's in a temp directory
+            if str(artifact_dir).startswith(tempfile.gettempdir()):
+                logger.info(f"Cleaning up temporary artifacts at: {artifact_dir}")
+                shutil.rmtree(artifact_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Failed to clean up artifacts: {str(e)}")
+
 
 # Create FastAPI app with lifespan
 app = FastAPI(title="LUME Model Inference Service", lifespan=lifespan)
+
 
 # Dependency: Get model from app state
 async def get_model(request: Request) -> TorchModel:
@@ -374,9 +481,16 @@ async def predict(
     try:
         logger.debug(f"Received prediction request: {request.inputs}")
         
-        # Evaluate the LUME model (input validation already set on model load)
-        outputs = model.evaluate(request.inputs)
-        
+        # Evaluate the LUME model with timeout protection (30 seconds)
+        try:
+            outputs = await asyncio.wait_for(
+                asyncio.to_thread(model.evaluate, request.inputs),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Prediction timeout after 30 seconds")
+            raise HTTPException(status_code=504, detail="Prediction request timed out after 30 seconds")
+
         logger.debug(f"Raw model output: {outputs}")
         
         # Clean outputs
@@ -386,6 +500,8 @@ async def predict(
         
         return PredictionResponse(outputs=cleaned_outputs)
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
@@ -400,6 +516,10 @@ async def predict_batch(
     """
     Run batch inference - multiple predictions at once
     
+    Handles both:
+    1. Vectorized batch processing (passes all samples as batched tensors)
+    2. Sequential processing (falls back if batch processing fails)
+
     Takes a list of input dictionaries and returns a list of predictions.
     Supports partial inputs (model will use defaults for missing values).
     Model is injected via dependency injection (thread-safe, immutable).
@@ -407,18 +527,55 @@ async def predict_batch(
     try:
         logger.debug(f"Received batch prediction request with {len(request.inputs_list)} samples")
         
-        outputs_list = []
-        
-        for idx, inputs in enumerate(request.inputs_list):
-            logger.debug(f"Processing sample {idx + 1}/{len(request.inputs_list)}: {inputs}")
-            
-            # Evaluate the LUME model (input validation already set on model load)
-            outputs = model.evaluate(inputs)
-            
-            # Clean outputs
-            cleaned_outputs = {k: clean_output_value(v) for k, v in outputs.items()}
-            outputs_list.append(cleaned_outputs)
-        
+        # Try vectorized batch processing first (more efficient)
+        try:
+            logger.debug("Attempting vectorized batch processing...")
+
+            # Prepare batched tensor inputs
+            batch_inputs = prepare_batch_inputs(request.inputs_list, model)
+            logger.debug(f"Prepared batch inputs with shapes: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in batch_inputs.items()]}")
+
+            # Single batched evaluation call with timeout
+            batch_outputs = await asyncio.wait_for(
+                asyncio.to_thread(model.evaluate, batch_inputs),
+                timeout=30.0
+            )
+
+            logger.debug(f"Batch outputs: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in batch_outputs.items()]}")
+
+            # Split batch outputs back into individual results
+            outputs_list = split_batch_outputs(batch_outputs, len(request.inputs_list))
+
+            logger.info(f"✓ Vectorized batch processing succeeded for {len(outputs_list)} samples")
+
+        except Exception as batch_error:
+            # Fall back to sequential processing
+            logger.warning(f"Vectorized batch processing failed ({str(batch_error)}), falling back to sequential processing")
+
+            outputs_list = []
+
+            for idx, inputs in enumerate(request.inputs_list):
+                logger.debug(f"Processing sample {idx + 1}/{len(request.inputs_list)}: {inputs}")
+
+                # Evaluate the LUME model with timeout protection
+                try:
+                    outputs = await asyncio.wait_for(
+                        asyncio.to_thread(model.evaluate, inputs),
+                        timeout=30.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"Prediction timeout for sample {idx + 1} after 30 seconds")
+                    raise HTTPException(
+                        status_code=504,
+                        detail=f"Prediction request timed out for sample {idx + 1} after 30 seconds"
+                    )
+
+                # Clean outputs
+                cleaned_outputs = {k: clean_output_value(v) for k, v in outputs.items()}
+                outputs_list.append(cleaned_outputs)
+
+            logger.info(f"✓ Sequential processing completed for {len(outputs_list)} samples")
+
         logger.debug(f"Batch prediction completed: {len(outputs_list)} results")
         
         return BatchPredictionResponse(
@@ -426,6 +583,11 @@ async def predict_batch(
             batch_size=len(outputs_list)
         )
     
+    except asyncio.TimeoutError:
+        logger.error(f"Batch prediction timeout after 30 seconds")
+        raise HTTPException(status_code=504, detail="Batch prediction request timed out after 30 seconds")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Batch prediction error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
