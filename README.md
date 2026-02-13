@@ -5,7 +5,7 @@ This repo contains code for FastAPI service for serving LUME models from MLFlow.
 
 ### Environment Variables
 1. MLFLOW_TRACKING_URI: This is set in the mlflow-config configmap. 
-2. MODEL_NAME: lcls_cu_inj_model or lcls-fel-surrogate
+2. MODEL_NAME: lcls-cu-inj-model or lcls-fel-surrogate
 3. MODEL_VERSION: 1
 
 ### Testing inference service image 

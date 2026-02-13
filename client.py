@@ -1,27 +1,87 @@
 import requests
 from typing import Dict, Any, List, Optional
 import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class InferenceClient:
-    """Client for calling the inference service"""
+    """Client for calling the inference service
+    Uses connection pooling for efficient HTTP requests.
     
-    def __init__(self, base_url: str, timeout: int = 30):
-        """
-        Args:
-            base_url: Base URL of the inference service (e.g., "http://inference-service:8000")
-            timeout: Request timeout in seconds
-        """
+    Parameters
+    ----------
+    base_url : str
+        Base URL of the inference service (e.g., "http://inference-service:8000").
+    timeout : int, optional
+        Request timeout in seconds. Default is 30.
+    max_retries : int, optional
+        Maximum number of retries for failed requests. Default is 3.
+    pool_connections : int, optional
+        Number of connection pools to cache. Default is 10.
+    pool_maxsize : int, optional
+        Maximum number of connections to save in the pool. Default is 10.
+    """
+    
+    def __init__(
+        self, 
+        base_url: str, 
+        timeout: int = 30,
+        max_retries: int = 3,
+        pool_connections: int = 10,
+        pool_maxsize: int = 10
+    ):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
-        self.session = requests.Session()  # Reuse connection
-        logger.info(f"Initialized client for {self.base_url}")
+        
+        # Create session with connection pooling
+        self.session = requests.Session()
+        
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=0.5,  # Wait 0.5s, 1s, 2s between retries
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "POST", "OPTIONS"]
+        )
+        
+        # Configure HTTP adapter with connection pooling
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=pool_connections,
+            pool_maxsize=pool_maxsize
+        )
+        
+        # Mount adapter for both http and https
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
+        # Set default headers (avoid connection close)
+        self.session.headers.update({
+            'Connection': 'keep-alive',
+            'Content-Type': 'application/json'
+        })
+        
+        logger.info(f"Initialized client for {self.base_url} with connection pooling")
+
+    def __del__(self):
+        """Cleanup: Close session on deletion"""
+        if hasattr(self, 'session'):
+            self.session.close()
+
     
     def health_check(self) -> bool:
-        """Check if service is healthy"""
+        """
+        Check if the inference service is healthy.
+        
+        Returns
+        -------
+        bool
+            True if the service responds with status 200, False otherwise.
+        """
         try:
             response = self.session.get(
                 f"{self.base_url}/health",
@@ -91,29 +151,6 @@ class InferenceClient:
             f"{self.base_url}/predict/batch",
             json={"inputs_list": inputs_list},
             timeout=self.timeout * 2  # Longer timeout for batch
-        )
-        response.raise_for_status()
-        return response.json()
-    
-    def load_model(self, model_name: str, model_version: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Load a different model
-        
-        Args:
-            model_name: Name of the model to load
-            model_version: Version or stage (optional)
-        
-        Returns:
-            Load response with status
-        """
-        payload = {"model_name": model_name}
-        if model_version:
-            payload["model_version"] = model_version
-        
-        response = self.session.post(
-            f"{self.base_url}/model/load",
-            json=payload,
-            timeout=60  # Model loading can take longer
         )
         response.raise_for_status()
         return response.json()
