@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inference-service-cu-inj
+  annotations:
+    nginx.ingress.kubernetes.io/whitelist-source-range: "71.198.255.25,134.79.0.0/16,172.16.0.0/12,208.45.173.162,216.46.165.69"
+    nginx.ingress.kubernetes.io/proxy-body-size: 2g
+    nginx.ingress.kubernetes.io/client-max-body-size: 2g
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+spec:
+  rules:
+  - host: "ard-minio.slac.stanford.edu"
+    http:
+      paths:
+      - pathType: Prefix
+        path: "/"
+        backend:
+          service:
+            name: inference-service-cu-inj
+            port:
+              number: 8000
