@@ -84,7 +84,7 @@ class InferenceStressTester:
         dict
             Dictionary of input values
         """
-        inputs = DEFAULT_INPUTS.copy()
+        inputs = {}
         
         # Add the two varying inputs with random values
         for var_name, config in INPUTS_CONFIG.items():
