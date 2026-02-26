@@ -13,6 +13,7 @@ for i in $(seq 1 $NUM_CLIENTS); do
         --duration $DURATION \
         > client_${i}.log 2>&1 &
     echo "Started client $i (PID: $!)"
+    sleep 0.2 # Stagger client startups slightly
 done
 
 echo "All clients started. Logs: client_*.log"
