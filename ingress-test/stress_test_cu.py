@@ -15,7 +15,7 @@ from datetime import datetime
 import statistics
 
 # Configuration
-INFERENCE_URL = "https://ard-minio.slac.stanford.edu"
+INFERENCE_URL = "https://ard-modeling-service.slac.stanford.edu/fel"
 
 # Input ranges for the two variables we're varying
 INPUTS_CONFIG = {

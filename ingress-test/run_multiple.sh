@@ -7,7 +7,7 @@ DURATION=${3:-60}
 echo "Starting $NUM_CLIENTS clients at $RATE Hz for $DURATION seconds..."
 
 for i in $(seq 1 $NUM_CLIENTS); do
-    python stress_test.py \
+    python stress_test_fel.py \
         --client-id $i \
         --rate $RATE \
         --duration $DURATION \
