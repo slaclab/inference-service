@@ -5,7 +5,7 @@ cpu_request: 500m
 memory_limit: 4Gi
 memory_request: 2Gi
 model_name: lcls-cu-inj-model
-model_version: '1'
+model_version: '3'
 namespace: inference-service
 replicas: 1
 service_name: inference-service

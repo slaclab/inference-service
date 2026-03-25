@@ -8,7 +8,7 @@ metadata:
   labels:
     app: inference-service
     model: lcls-cu-inj-model
-    version: "1"
+    version: "3"
 spec:
   replicas: 1
   selector:
@@ -19,7 +19,7 @@ spec:
       labels:
         app: inference-service
         model: lcls-cu-inj-model
-        version: "1"
+        version: "3"
     spec:
       containers:
       - name: inference
@@ -40,7 +40,7 @@ spec:
         - name: MODEL_NAME
           value: "lcls-cu-inj-model"
         - name: MODEL_VERSION
-          value: "1"
+          value: "3"
         resources:
           requests:
             memory: "2Gi"
