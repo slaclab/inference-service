@@ -90,6 +90,12 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
 
+class VariableTypesResponse(BaseModel):
+    input_types: Dict[str, str]
+    output_types: Dict[str, str]
+
+
+
 
 def download_model_artifacts(model_name: str, model_version: Optional[str] = None) -> tuple[str, str]:
     """
@@ -452,6 +458,21 @@ async def get_model_inputs(model: TorchModel = Depends(get_model)):
         input_variables=input_variables
     )
 
+@app.get("/inputs/types", response_model=VariableTypesResponse)
+async def get_variable_types(model: TorchModel = Depends(get_model)):
+    """Get the types of all input and output variables"""
+    input_types = {}
+    for var in model.input_variables:
+        input_types[var.name] = var.__class__.__name__
+    
+    output_types = {}
+    for var in model.output_variables:
+        output_types[var.name] = var.__class__.__name__
+    
+    return VariableTypesResponse(
+        input_types=input_types,
+        output_types=output_types
+    )
 
 @app.get("/outputs", response_model=ModelOutputsResponse)
 async def get_model_outputs(model: TorchModel = Depends(get_model)):
