@@ -1,6 +1,7 @@
 # copier-template-k8s/copier.yml
 
 _templates_suffix: .jinja
+_answers_file: .copier-answers.yml
 
 # Questions to ask when generating
 service_name:
