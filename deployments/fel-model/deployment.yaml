@@ -8,7 +8,7 @@ metadata:
   labels:
     app: inference-service-fel
     model: lcls-fel-surrogate
-    version: "6"
+    version: "20"
 spec:
   replicas: 1
   selector:
@@ -19,7 +19,7 @@ spec:
       labels:
         app: inference-service-fel
         model: lcls-fel-surrogate
-        version: "6"
+        version: "20"
     spec:
       containers:
       - name: inference
@@ -40,7 +40,7 @@ spec:
         - name: MODEL_NAME
           value: "lcls-fel-surrogate"
         - name: MODEL_VERSION
-          value: "6"
+          value: "20"
         resources:
           requests:
             memory: "2Gi"
