@@ -5,7 +5,7 @@ cpu_request: 500m
 memory_limit: 4Gi
 memory_request: 2Gi
 model_name: lcls-fel-surrogate
-model_version: '20'
+model_version: '21'
 namespace: lume-online-ml
 replicas: 1
 service_name: inference-service-fel
