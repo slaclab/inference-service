@@ -12,7 +12,7 @@ from pydantic import BaseModel
 import uvicorn
 import mlflow
 from mlflow.tracking import MlflowClient
-from lume_model.models import TorchModel
+from lume_torch.models import TorchModel
 
 # Import torch and numpy at the top for efficiency
 try:
@@ -235,9 +235,9 @@ def clean_output_value(value) -> float:
         Cleaned output value
     """
     if torch is not None and isinstance(value, torch.Tensor):
-        return float(value.detach().cpu().numpy())
+        return value.detach().cpu().item()
     elif np is not None and isinstance(value, np.ndarray):
-        return float(value)
+        return value.item()
     else:
         return float(value)
 
@@ -449,7 +449,7 @@ async def get_model_inputs(model: TorchModel = Depends(get_model)):
         input_variables[var.name] = {
             "default": var.default_value,
             "range": list(var.value_range) if var.value_range else None,
-            "is_constant": var.is_constant,
+            "read_only": var.read_only,
             "unit": var.unit,
         }
     

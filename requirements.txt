@@ -1,5 +1,5 @@
 mlflow==3.8.1
-lume-model
+lume-torch
 fastapi
 uvicorn[standard]
 copier
