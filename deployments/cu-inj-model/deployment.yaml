@@ -8,7 +8,7 @@ metadata:
   labels:
     app: inference-service-cu-inj
     model: lcls-cu-inj-model
-    version: "1"
+    version: "2"
 spec:
   replicas: 1
   selector:
@@ -19,7 +19,7 @@ spec:
       labels:
         app: inference-service-cu-inj
         model: lcls-cu-inj-model
-        version: "1"
+        version: "2"
     spec:
       containers:
       - name: inference
@@ -40,14 +40,14 @@ spec:
         - name: MODEL_NAME
           value: "lcls-cu-inj-model"
         - name: MODEL_VERSION
-          value: "1"
+          value: "2"
         resources:
           requests:
-            memory: "4Gi"
-            cpu: "1000m"
+            memory: "2Gi"
+            cpu: "500m"
           limits:
-            memory: "8Gi"
-            cpu: "4000m"
+            memory: "4Gi"
+            cpu: "2000m"
         livenessProbe:
           httpGet:
             path: /health
